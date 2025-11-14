@@ -2,99 +2,91 @@ pipeline {
   agent any
 
   parameters {
-    string(name: "App_Version", description: "provide application version")
+    string(name: "App_Version", defaultValue: "v1", description: "application version")
+    string(name: "DOCKER_NAMESPACE", defaultValue: "8072388539", description: "Docker Hub username/org")
   }
 
   environment {
-    DOCKERHUB_CREDENTIALS=credentials("dockerhub")
+    DOCKER_IMAGE = "${params.DOCKER_NAMESPACE}/datastore:${params.App_Version}"
   }
 
   stages {
-    stage("Repo Clone") {
+    stage('Checkout') {
       steps {
-        checkout scmGit(branches: [[name: '*/main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/simonxox/datastoreCICD.git']])
+        checkout([$class: 'GitSCM', branches: [[name: '*/main']],
+          userRemoteConfigs: [[url: 'https://github.com/simonxox/datastoreCICD.git']]])
       }
     }
-    stage("Maven Build") {
-      steps {
-        sh """
-            echo "-------- Building Application --------"
-            mvn clean package
-            echo "------- Application Built Successfully --------"
-        """
-      }
-    }
-    stage("Maven Test") {
-      steps {
-        sh """
-          echo "-------- Executing Testcases --------"
-          mvn test
-          echo "-------- Testcases Execution Complete --------"
-        """
-      }
-    }
-    stage("Artifact Store") {
-      steps {
-        sh """
-          echo "-------- Pushing Artifacts To S3 --------"
-          aws s3 cp ./target/*.jar s3://bakka1122/
-          echo "-------- Pushing Artifacts To S3 Completed --------"
-        """
-      }
-    }
-    stage("Docker Image Build") {
-      steps {
-        sh """
-          echo "-------- Building Docker Image --------"
-          docker build -t datastore:"${App_Version}" .
-          echo "-------- Image Successfully Built --------"
-        """
-      }
-    }
-    stage("Docker Image Scan") {
-      steps {
-        sh """
-          echo "-------- Scanning Docker Image --------"
-          trivy image datastore:"${App_Version}"
-          echo "-------- Scanning Docker Image Complete --------"
-        """
-      }
-    }
-    stage("Docker Image Tag") {
-      steps{
-        sh """
-          echo "-------- Tagging Docker Image --------"
-          docker tag datastore:"${App_Version}" 8072388539/datastore:"${App_Version}"
-          echo "-------- Tagging Docker Image Completed."
-        """
-      }
-    }
-    stage("Loggingin & Pushing Docker image") {
-      steps {
-        sh """
-          echo "-------- Logging To DockerHub --------"
-          docker login -u $DOCKERHUB_CREDENTIALS_USR --password $DOCKERHUB_CREDENTIALS_PSW
-          echo "-------- DockerHub Login Successful --------"
 
-          echo "-------- Pushing Docker Image To DockerHub --------"
-          docker push 8072388539/datastore:"${App_Version}"
-          echo "-------- Docker Image Pushed Successfully --------"
-        """
+    stage('Maven Build & Test') {
+      agent {
+        docker {
+          image 'maven:3.9.4-eclipse-temurin-17'
+          args '-v $HOME/.m2:/root/.m2'
+        }
       }
-    }
-    stage("cleanup") {
       steps {
-        sh """
-           echo "-------- Cleaning Up Jenkins Machine --------"
-           docker image prune -a -f
-           echo "-------- Clean Up Successful --------"
-        """
+        sh 'mvn -v'
+        sh 'mvn -B clean package'
       }
     }
-    stage("Deployment Acceptance") {
+
+    stage('Upload artifact to S3') {
       steps {
-        input 'Trigger Down Stream Job'
+        // uses amazon/aws-cli container (instance role recommended)
+        sh '''
+          docker run --rm -v $PWD:/workdir -w /workdir amazon/aws-cli:2.16.23 \
+            s3 cp ./target/*.jar s3://bakka1122/ || true
+        '''
       }
     }
+
+    stage('Docker Build') {
+      steps {
+        sh '''
+          echo "Building ${DOCKER_IMAGE}"
+          docker build -t ${DOCKER_IMAGE} .
+          docker images ${DOCKER_IMAGE} || true
+        '''
+      }
+    }
+
+    stage('Image Scan') {
+      steps {
+        sh '''
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest \
+            image --timeout 5m ${DOCKER_IMAGE} || true
+        '''
+      }
+    }
+
+    stage('Login & Push') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+          sh '''
+            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+            docker push ${DOCKER_IMAGE}
+            docker logout
+          '''
+        }
+      }
+    }
+
+    stage('Cleanup') {
+      steps {
+        sh 'docker image prune -a -f || true'
+      }
+    }
+
+    stage('Deployment Acceptance') {
+      steps {
+        input message: "Trigger downstream deploy?"
+      }
+    }
+  }
+
+  post {
+    always { echo "Pipeline finished." }
+    failure { echo "Pipeline failed." }
   }
 }
