@@ -1,33 +1,4 @@
 pipeline {
-  stages {
-    stage("test") {
-      parallel {
-        stage("p-1st-stage") {
-          steps {
-            sh """
-              sleep 300
-            """
-          }
-        }
-        stage("p-2nd-stage") {
-          steps {
-            sh """
-              sleep 500
-            """
-          }
-        }
-      }
-    }
-    stage("demo") {
-      steps {
-        sh """
-           echo "serial stage."
-        """
-      }
-    }
-  }
-}
-pipeline {
   agent any
 
   parameters {
