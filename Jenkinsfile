@@ -96,5 +96,41 @@ pipeline {
         input 'Trigger Down Stream Job'
       }
     }
+    stage("Triggering Deployment Job") {
+      steps {
+        build job: "KubernetesDeployment", parameters: [string(name: "App_Name", value: "datastore-deploy"), string(name: "App_Version", value: "${params.App_Version}")]
+      }
+    }
   }
+  post {
+        success {
+            slackSend channel: '#alerting',
+                      color: 'good',
+                      message: "✔️ SUCCESS: `${env.JOB_NAME} #${env.BUILD_NUMBER}` completed successfully."
+        }
+
+        failure {
+            slackSend channel: '#alerting',
+                      color: 'danger',
+                      message: "❌ FAILURE: `${env.JOB_NAME} #${env.BUILD_NUMBER}` failed.\nCheck console output: ${env.BUILD_URL}"
+        }
+
+        unstable {
+            slackSend channel: '#alerting',
+                      color: 'warning',
+                      message: "⚠️ UNSTABLE: `${env.JOB_NAME} #${env.BUILD_NUMBER}` returned unstable status."
+        }
+
+        aborted {
+            slackSend channel: '#alerting',
+                      color: '#808080',
+                      message: "⛔ ABORTED: `${env.JOB_NAME} #${env.BUILD_NUMBER}` was aborted."
+        }
+
+        always {
+            slackSend channel: '#alerting',
+                      color: '#439FE0',
+                      message: "ℹ️ Build finished: `${env.JOB_NAME} #${env.BUILD_NUMBER}`"
+        }
+    }
 }
